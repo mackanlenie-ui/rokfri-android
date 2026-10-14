@@ -3,6 +3,8 @@
 
     <application
         android:allowBackup="false"
+        android:icon="@drawable/ic_rokfri_launcher"
+        android:roundIcon="@drawable/ic_rokfri_launcher"
         android:label="Rökfri"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">

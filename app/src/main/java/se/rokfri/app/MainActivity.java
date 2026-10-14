@@ -85,7 +85,6 @@ public class MainActivity extends Activity {
         root.addView(subtitle);
 
         LinearLayout counterCard = card();
-        root.addView(counterCard);
 
         counterCard.addView(text("DAGENS CIGARETTER", 12, muted, true));
 
@@ -121,7 +120,6 @@ public class MainActivity extends Activity {
 
         LinearLayout timerCard = card();
         timerCard.setPadding(dp(18), dp(18), dp(18), dp(18));
-        root.addView(timerCard);
 
         timerCard.addView(text("⏱  TID SEDAN SENASTE CIGARETTEN",
                 12, muted, true));

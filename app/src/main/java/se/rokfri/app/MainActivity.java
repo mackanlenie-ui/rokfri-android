@@ -292,17 +292,53 @@ public class MainActivity extends Activity {
 
     private void showCravingHelp() {
         String[] tips = {
-            "Vänta 5 minuter. Röksug brukar komma i vågor och kan avta.",
-            "Ta ett glas vatten och andas långsamt tio gånger.",
-            "Gå en kort promenad eller byt rum en stund.",
-            "Känner du dig ensam eller nere? Skicka ett enkelt meddelande till någon.",
-            "Påminn dig själv: jag behöver inte bestämma resten av dagen nu."
+            "Vänta en stund. Röksug kommer ofta i vågor och kan klinga av.",
+            "Drick ett glas vatten och ta tio långsamma andetag.",
+            "Byt miljö: gå en kort promenad eller lämna rummet.",
+            "Gör något med händerna, till exempel diska, rita eller håll i en penna.",
+            "Du behöver inte bestämma över resten av dagen. Ta bara nästa fem minuter."
         };
         new AlertDialog.Builder(this).setTitle("💚 Ta dig igenom röksuget")
+            .setMessage("Välj ett tips eller starta en femminuterspaus. Du behöver inte kämpa med hela dagen på en gång.")
             .setItems(tips, (dialog, which) -> new AlertDialog.Builder(this)
                 .setTitle("Prova detta nu").setMessage(tips[which])
                 .setPositiveButton("Okej", null).show())
+            .setNeutralButton("Starta 5 min paus", (dialog, which) -> startCravingTimer())
             .setPositiveButton("Stäng", null).show();
+    }
+
+    private void startCravingTimer() {
+        final TextView countdown = text("05:00", 42, green, true);
+        countdown.setGravity(Gravity.CENTER);
+        countdown.setPadding(dp(20), dp(20), dp(20), dp(12));
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(20), dp(8), dp(20), dp(8));
+        layout.addView(countdown);
+        TextView prompt = text("Lägg undan cigaretterna en stund. Andas lugnt, drick lite vatten och låt suget passera utan att behöva agera på det.", 16, dark, false);
+        layout.addView(prompt);
+        final AlertDialog dialog = new AlertDialog.Builder(this)
+            .setTitle("🌿 Fem minuter för dig")
+            .setView(layout)
+            .setPositiveButton("Avsluta", null)
+            .create();
+        final long endAt = System.currentTimeMillis() + 5 * 60 * 1000L;
+        final Runnable[] tick = new Runnable[1];
+        tick[0] = () -> {
+            long remaining = Math.max(0, (endAt - System.currentTimeMillis() + 999) / 1000);
+            long minutes = remaining / 60;
+            long seconds = remaining % 60;
+            countdown.setText(String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds));
+            if (remaining == 0) {
+                countdown.setText("Klart! 🌱");
+                prompt.setText("Bra jobbat med att ge dig själv fem minuter. Känn efter hur du mår nu — varje paus är en vinst.");
+            } else if (dialog.isShowing()) {
+                handler.postDelayed(tick[0], 1000);
+            }
+        };
+        dialog.setOnDismissListener(d -> handler.removeCallbacks(tick[0]));
+        dialog.setOnShowListener(d -> handler.post(tick[0]));
+        dialog.show();
     }
 
     private void showStats() {
@@ -311,13 +347,17 @@ public class MainActivity extends Activity {
         int max = 1;
         int[] values = new int[7];
         String[] labels = new String[7];
+        java.util.Calendar day = java.util.Calendar.getInstance();
+        java.util.Calendar todayCalendar = (java.util.Calendar) day.clone();
         for (int i = 0; i < 7; i++) {
-            long dayMillis = System.currentTimeMillis() - i * 24L * 60L * 60L * 1000L;
-            String key = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date(dayMillis));
+            day.setTimeInMillis(todayCalendar.getTimeInMillis());
+            day.add(java.util.Calendar.DAY_OF_YEAR, -i);
+            Date dayDate = day.getTime();
+            String key = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(dayDate);
             values[i] = prefs.getInt("count_" + key, 0);
             max = Math.max(max, values[i]);
             total += values[i];
-            labels[i] = i == 0 ? "Idag" : new SimpleDateFormat("EEE dd/MM", Locale.getDefault()).format(new Date(dayMillis));
+            labels[i] = i == 0 ? "Idag" : new SimpleDateFormat("EEE dd/MM", Locale.getDefault()).format(dayDate);
         }
         for (int i = 0; i < 7; i++) {
             int barCount = values[i] == 0 ? 0 : Math.max(1, (int)Math.round(values[i] * 12.0 / max));

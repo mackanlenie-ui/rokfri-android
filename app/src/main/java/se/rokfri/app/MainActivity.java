@@ -16,7 +16,19 @@ import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.content.SharedPreferences;
+import android.content.Intent;
+import android.net.Uri;
 import android.text.InputType;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
 
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
@@ -147,6 +159,11 @@ public class MainActivity extends Activity {
         root.addView(statsButton);
         statsButton.setOnClickListener(v -> showStats());
 
+        Button backupButton = button("🛟  Säkerhetskopiera / återställ", Color.rgb(220, 239, 227));
+        backupButton.setTextColor(dark);
+        root.addView(backupButton);
+        backupButton.setOnClickListener(v -> showBackupOptions());
+
         Button moneyButton = button("⚙️  Ekonomi och inställningar", Color.rgb(232, 239, 234));
         moneyButton.setTextColor(dark);
         root.addView(moneyButton);
@@ -243,6 +260,144 @@ public class MainActivity extends Activity {
         input.setText(value);
         input.setInputType(InputType.TYPE_CLASS_NUMBER | (decimal ? InputType.TYPE_NUMBER_FLAG_DECIMAL : 0));
         return input;
+    }
+
+    private static final int REQUEST_EXPORT_BACKUP = 7311;
+    private static final int REQUEST_IMPORT_BACKUP = 7312;
+
+    private void showBackupOptions() {
+        new AlertDialog.Builder(this)
+            .setTitle("🛟 Säkerhetskopiering")
+            .setMessage("Spara dina cigarettregistreringar, mål och ekonomiska inställningar i en backupfil. Förvara filen privat. Återställning ersätter de sparade Rökfri-uppgifterna på den här mobilen.")
+            .setPositiveButton("Skapa säkerhetskopia", (d, w) -> startBackupExport())
+            .setNeutralButton("Återställ från fil", (d, w) -> startBackupImport())
+            .setNegativeButton("Avbryt", null)
+            .show();
+    }
+
+    private void startBackupExport() {
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/json");
+        intent.putExtra(Intent.EXTRA_TITLE, "Rokfri-backup-" + today() + ".json");
+        startActivityForResult(intent, REQUEST_EXPORT_BACKUP);
+    }
+
+    private void startBackupImport() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        startActivityForResult(intent, REQUEST_IMPORT_BACKUP);
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        Uri uri = data.getData();
+        if (requestCode == REQUEST_EXPORT_BACKUP) exportBackup(uri);
+        else if (requestCode == REQUEST_IMPORT_BACKUP) confirmBackupImport(uri);
+    }
+
+    private void exportBackup(Uri uri) {
+        try {
+            JSONObject backup = new JSONObject();
+            backup.put("app", "Rokfri");
+            backup.put("formatVersion", 1);
+            backup.put("createdAt", System.currentTimeMillis());
+            JSONObject values = new JSONObject();
+            for (java.util.Map.Entry<String, ?> entry : prefs.getAll().entrySet()) {
+                Object value = entry.getValue();
+                if (value instanceof Integer || value instanceof Long || value instanceof Boolean || value instanceof String) {
+                    values.put(entry.getKey(), value);
+                } else if (value instanceof Float) {
+                    values.put(entry.getKey(), ((Float) value).doubleValue());
+                }
+            }
+            backup.put("preferences", values);
+            try (OutputStream stream = getContentResolver().openOutputStream(uri);
+                 Writer writer = new OutputStreamWriter(stream, java.nio.charset.StandardCharsets.UTF_8)) {
+                if (writer == null) throw new java.io.IOException("Kunde inte öppna backupfilen.");
+                writer.write(backup.toString(2));
+            }
+            new AlertDialog.Builder(this).setTitle("Backup sparad")
+                .setMessage("Säkerhetskopian har sparats. Du kan kopiera filen till en säker plats, till exempel Google Drive eller en dator.")
+                .setPositiveButton("Klart", null).show();
+        } catch (Exception ex) {
+            showBackupError("Kunde inte spara säkerhetskopian. Kontrollera att du valde en plats med skrivbehörighet.");
+        }
+    }
+
+    private void confirmBackupImport(Uri uri) {
+        new AlertDialog.Builder(this).setTitle("Återställa Rökfri?")
+            .setMessage("De nuvarande Rökfri-uppgifterna ersätts av uppgifterna i filen. Gör gärna en ny säkerhetskopia först.")
+            .setNegativeButton("Avbryt", null)
+            .setPositiveButton("Återställ", (d, w) -> importBackup(uri))
+            .show();
+    }
+
+    private void importBackup(Uri uri) {
+        try {
+            StringBuilder jsonText = new StringBuilder();
+            try (InputStream stream = getContentResolver().openInputStream(uri)) {
+                if (stream == null) throw new java.io.IOException("Filen kunde inte öppnas.");
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, java.nio.charset.StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        jsonText.append(line);
+                        if (jsonText.length() > 2_000_000) throw new java.io.IOException("Backupfilen är för stor.");
+                    }
+                }
+            }
+            JSONObject backup = new JSONObject(jsonText.toString());
+            if (!"Rokfri".equals(backup.optString("app")) || backup.optInt("formatVersion", -1) != 1) {
+                throw new IllegalArgumentException("Det här är inte en backupfil som stöds av Rökfri.");
+            }
+            JSONObject values = backup.optJSONObject("preferences");
+            if (values == null) throw new IllegalArgumentException("Backupfilen saknar sparade uppgifter.");
+            SharedPreferences.Editor editor = prefs.edit().clear();
+            java.util.Iterator<String> keys = values.keys();
+            int imported = 0;
+            while (keys.hasNext()) {
+                String key = keys.next();
+                Object value = values.get(key);
+                if ("goal".equals(key) && value instanceof Number) {
+                    int n = ((Number) value).intValue();
+                    if (n < 1 || n > 30) continue;
+                    editor.putInt(key, n); imported++;
+                } else if ("pack_price_bits".equals(key) && value instanceof Number) {
+                    double n = Double.longBitsToDouble(((Number) value).longValue());
+                    if (!Double.isFinite(n) || n < 0 || n > 10000) continue;
+                    editor.putLong(key, ((Number) value).longValue()); imported++;
+                } else if (("cigs_per_pack".equals(key) || "baseline_daily".equals(key) || key.startsWith("count_")) && value instanceof Number) {
+                    int n = ((Number) value).intValue();
+                    int max = key.equals("cigs_per_pack") ? 100 : (key.equals("baseline_daily") ? 200 : 1000);
+                    if (n < 0 || n > max || ("cigs_per_pack".equals(key) && n == 0)) continue;
+                    if ("cigs_per_pack".equals(key) || "baseline_daily".equals(key)) editor.putInt(key, n);
+                    else if (key.matches("count_\\d{4}-\\d{2}-\\d{2}")) editor.putInt(key, n);
+                    else continue;
+                    imported++;
+                } else if ("last_cigarette".equals(key) && value instanceof Number) {
+                    long n = ((Number) value).longValue();
+                    if (n < 0 || n > System.currentTimeMillis()) continue;
+                    editor.putLong(key, n); imported++;
+                }
+            }
+            if (imported == 0) throw new IllegalArgumentException("Inga giltiga Rökfri-uppgifter hittades i filen.");
+            editor.apply();
+            goal = prefs.getInt("goal", 15);
+            showHome();
+            new AlertDialog.Builder(this).setTitle("Återställning klar")
+                .setMessage(imported + " uppgifter återställdes.")
+                .setPositiveButton("Klart", null).show();
+        } catch (Exception ex) {
+            showBackupError(ex instanceof IllegalArgumentException ? ex.getMessage() : "Filen kunde inte läsas. Kontrollera att du valt en giltig Rökfri-backup.");
+        }
+    }
+
+    private void showBackupError(String message) {
+        new AlertDialog.Builder(this).setTitle("Säkerhetskopiering")
+            .setMessage(message == null ? "Något gick fel." : message)
+            .setPositiveButton("Okej", null).show();
     }
 
     private void showMoneySettings() {
